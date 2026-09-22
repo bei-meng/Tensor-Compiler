@@ -234,3 +234,97 @@ build目录下使用tac-opt工具能正确读取和输出，说明方言和算�
 #   }
 # }
 ```
+
+## 3. ONNX模型解析
+### 3.1 C++ Protobuf库
+ONNX 模型文件本质是 Protobuf 序列化数据，C++ 读取、解析onnx文件，需要 C++ Protobuf 库。\
+首先安装protoc(protobuf编译器)
+```bash
+sudo apt install protobuf-compiler libprotobuf-dev
+protoc --version
+```
+会通过Python来生成ONNX模型，所以Python的onnx版本要对齐
+```bash
+python3 -c "import onnx; print(onnx.__version__)"
+# 输出：1.23.0
+```
+然后拉取对应版本的ONNX，编译生成ONNX模型解析需要的头文件：\
+`onnx-ml.pb.h`：C++ 头文件，声明 `onnx::ModelProto`、`onnx::GraphProto`、`onnx::NodeProto` 等所有类 \
+`onnx-ml.pb.cc`：C++ 源文件，protobuf 序列化 / 反序列化的实现代码 \
+然后将对应的头文件和实现移动到项目中
+```bash
+git clone --depth 1 --branch rel-1.23.0 git@github.com:onnx/onnx.git
+cd onnx
+protoc --cpp_out=. onnx/onnx-ml.proto
+
+mv onnx/onnx-ml.pb.h /home/ubuntu/mlir-onnx/tensor-compiler/include/onnx
+mv onnx/onnx-ml.pb.cc /home/ubuntu/mlir-onnx/tensor-compiler/include/onnx
+```
+
+### 3.2 自定义ONNX文件解析
+项目是为了轻量化的实现ONNX算子到MLIR编译器的前端降级，不是做推理运行时，所以选择了自己做轻量解析。\
+一方面是架构解耦，把 ONNX 协议层和 MLIR 转换层拆开，中间用自定义的图结构隔离，后续扩展和维护都更灵活；另一方面是足够轻量，只依赖 protobuf，不用引入 ONNX Runtime 这种重型依赖，和 MLIR 构建系统也不会冲突。\
+在解析阶段做很多针对 MLIR 的定制预处理，比如常量提权合并到initializer \
+首先构建onnx的proto对应的数据结构，用于存储解析的信息
+利用Protobuf库将onnx对应的将ModelProto解析为ModeInfo
+```C++
+// include/tac/OnnxModelInfo.h
+// 存数据+形状+元素类型
+struct TensorInfo;
+// 存形状+元素类型
+struct ValueInfo;
+// 存属性，这里主要对应tensor类型的属性
+struct AttributeInfo;
+// 存算子节点，op_type，输入输出名称，还有属性
+struct NodeInfo;
+// 存图数据，Initializer，node，输入输出的Value
+struct GraphInfo;
+struct ModelInfo;
+
+// lib/parser_onnx/OnnxParser.cpp 解析实现
+// lib/parser_onnx/OnnxDumping.cpp 解析结果输出
+```
+
+### 3.2 ONNX文件解析测试
+使用python的onnx库，自定义model生成对应的add_constant文件，然后使用OnnxParser进行解析和OnnxDumping输出 \
+仅支持Constant、MatMul、Relu、Add操作 \
+可以把onnx模型用python转成prototxt文本方便对比解析结果
+```bash
+cd build
+ninja
+./onnx_parse_test add_constant.onnx
+
+# 输出
+# Model has 3 nodes
+# ONNX Model
+#   IR Version: 8
+#   Producer: tac-compiler
+#   Graph: ToyCompilerGraph
+#   Initializers [2]
+#     Name: const_out
+#         Tensor Info
+#         shape: [ 2 ]
+#         dtype: float32
+#         raw_bytes (hex): 00 00 80 3f 00 00 80 3f  (8 bytes)
+
+#     Name: stem.1.weight
+#         Tensor Info
+#         shape: [ 2 ]
+#         dtype: float32
+#         raw_bytes (hex): 00 00 20 41 00 00 a0 41  (8 bytes)
+
+#   Nodes: 2
+#        Op: Add
+#            Inputs: x stem.1.weight 
+#            Outputs: sum1 
+#        Op: Add
+#            Inputs: sum1 const_out 
+#            Outputs: final_out 
+# Graph inputs: 
+#    Value: x
+#        shape: [2]
+# Graph outputs: 
+#    Value: final_out
+#        shape: [2]
+```
+
