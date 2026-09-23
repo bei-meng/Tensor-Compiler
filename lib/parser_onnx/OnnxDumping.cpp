@@ -65,7 +65,13 @@ void dumpTensor(const tac::TensorInfo &t) {
 void dumpValueInfo(const tac::ValueInfo &v) {
     llvm::outs() << "   Value: " << v.name << "\n";
     llvm::outs() << "       shape: [";
-    for (auto d : v.shape) llvm::outs() << (d == -1 ? "?" : std::to_string(d)) << "";
+    int dim = v.shape.size();
+    if(dim>0){
+        llvm::outs() << (v.shape[0] == -1 ? "?" : std::to_string(v.shape[0]));
+        for (int i=0;i<dim;++i){
+            llvm::outs()  << " "<< (v.shape[i] == -1 ? "?" : std::to_string(v.shape[i]));
+        }
+    }
     llvm::outs() << "]\n";
 }
 

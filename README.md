@@ -236,6 +236,8 @@ build目录下使用tac-opt工具能正确读取和输出，说明方言和算�
 ```
 
 ## 3. ONNX模型解析
+只做结构读取和信息提取，不涉及运行时\
+ONNX模型文件 → 前端解析 → 中间表示优化/降级
 ### 3.1 C++ Protobuf库
 ONNX 模型文件本质是 Protobuf 序列化数据，C++ 读取、解析onnx文件，需要 C++ Protobuf 库。\
 首先安装protoc(protobuf编译器)
@@ -264,7 +266,7 @@ mv onnx/onnx-ml.pb.cc /home/ubuntu/mlir-onnx/tensor-compiler/include/onnx
 ### 3.2 自定义ONNX文件解析
 项目是为了轻量化的实现ONNX算子到MLIR编译器的前端降级，不是做推理运行时，所以选择了自己做轻量解析。\
 一方面是架构解耦，把 ONNX 协议层和 MLIR 转换层拆开，中间用自定义的图结构隔离，后续扩展和维护都更灵活；另一方面是足够轻量，只依赖 protobuf，不用引入 ONNX Runtime 这种重型依赖，和 MLIR 构建系统也不会冲突。\
-在解析阶段做很多针对 MLIR 的定制预处理，比如常量提权合并到initializer \
+在解析阶段可以做针对 MLIR 的定制预处理，比如常量提权合并到initializer \
 首先构建onnx的proto对应的数据结构，用于存储解析的信息
 利用Protobuf库将onnx对应的将ModelProto解析为ModeInfo
 ```C++
@@ -286,7 +288,8 @@ struct ModelInfo;
 ```
 
 ### 3.2 ONNX文件解析测试
-使用python的onnx库，自定义model生成对应的add_constant文件，然后使用OnnxParser进行解析和OnnxDumping输出 \
+使用python的onnx库，自定义model生成对应的onnx文件\
+然后使用OnnxParser进行解析和OnnxDumping输出 \
 仅支持Constant、MatMul、Relu、Add操作 \
 可以把onnx模型用python转成prototxt文本方便对比解析结果
 ```bash

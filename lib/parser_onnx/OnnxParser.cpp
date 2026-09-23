@@ -2,8 +2,14 @@
 #include "tac/OnnxModelInfo.h"
 
 #include "onnx/onnx-ml.pb.h"
+#include <cstddef>
 #include <cstring>
+#include <string>
 #include <sys/types.h>
+#include <queue>
+#include <unordered_set>
+#include <unordered_map>
+#include <vector>
 
 namespace tac{
 static TensorInfo parseTensor(const onnx::TensorProto &t){
@@ -137,6 +143,89 @@ static NodeInfo parseNode(const onnx::NodeProto &node){
     return info;
 }
 
+// static void NodeTopology(GraphInfo &info){
+//     size_t nodeNum = info.nodes.size();
+//     if(nodeNum > 1){
+//         // 构建节点的输入名字集合
+//         std::unordered_set<std::string> externalTensorNames;
+//         for(const auto &in :info.inputs){
+//             externalTensorNames.insert(in.name);
+//         }
+//         // 初始化集合
+//         for(const auto &init:info.initializers){
+//             externalTensorNames.insert(init.first);
+//         }
+
+//         // 构建输出张量到节点索引的映射
+//         std::unordered_map<std::string, size_t> outputToNodeIdx;
+//         for(size_t i=0;i<nodeNum;++i){
+//             const NodeInfo &node = info.nodes[i];
+//             // 遍历该节点的所有输出，全部映射到同一个节点索引
+//             for (const std::string &outputName : node.outputs) {
+//                 outputToNodeIdx[outputName] = i;
+//             }
+//         }
+
+//         // 计算每个节点的入度，同时构建邻接表
+//         std::vector<size_t> inDegree(nodeNum,0);
+//         std::vector<std::vector<size_t>> adj(nodeNum);
+
+
+//         for(size_t i=0;i<nodeNum;++i){
+//             const NodeInfo &node = info.nodes[i];
+//             for(const std::string &inName :node.inputs){
+//                 if(externalTensorNames.count(inName)){
+//                     continue;
+//                 }
+//                 // 输入来自其他节点
+//                 auto it = outputToNodeIdx.find(inName);
+//                 if(it == outputToNodeIdx.end()){
+//                     // 输入既不是外部资源也不是其他节点输出 → 非法图
+//                     std::cerr << "Error: tensor '" << inName 
+//                             << "' has no source in graph" << std::endl;
+//                     assert(false && "Invalid ONNX graph");
+//                 }
+//                 size_t preIdx = it->second;
+//                 // 输入指向输出
+//                 adj[preIdx].push_back(i);
+//                 inDegree[i]++;
+//             }
+//         }
+
+//         std::queue<size_t> q;
+//         for(size_t i=0;i<nodeNum;++i){
+//             if(inDegree[i]==0){
+//                 q.push(i);
+//             }
+//         }
+
+//         std::vector<NodeInfo> sortedNodes;
+//         sortedNodes.reserve(nodeNum);
+//         while(!q.empty()){
+//             size_t curr = q.front();
+//             q.pop();
+//             sortedNodes.push_back(std::move(info.nodes[curr]));
+
+//             // 遍历后继节点
+//             for(size_t v:adj[curr]){
+//                 --inDegree[v];
+//                 if(inDegree[v]==0){
+//                     q.push(v);
+//                 }
+//             }
+//         }
+
+//         // 成环校验：排序后节点数必须和原数一致，否则图中存在环，不是合法DAG
+//         if (sortedNodes.size() != nodeNum) {
+//             std::cerr << "Error: ONNX graph has cycle, not a valid DAG" << std::endl;
+//             assert(false && "Graph has cycle");
+//         }
+
+//         // 替换为拓扑有序的节点列表
+//         info.nodes = std::move(sortedNodes);
+//     }
+// }
+
 static GraphInfo parseGraph(const onnx::GraphProto &graph){
     GraphInfo info;
     info.name = graph.name();
@@ -167,6 +256,8 @@ static GraphInfo parseGraph(const onnx::GraphProto &graph){
         info.outputs.push_back(parseValue(out));
     }
 
+    // 对节点进行拓扑排序，在生成onnx模型的时候通过check检查，一定保证拓扑有序
+    // NodeTopology(info);
     return info;
 }
 

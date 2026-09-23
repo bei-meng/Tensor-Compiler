@@ -30,6 +30,7 @@ def ConstantOp : TacOp<"constant",[Pure]>{
     let results = (outs F32Tensor:$result);
     let hasVerifier = true;
     let builders = [
+        // 先结果类型，然后按 ODS `arguments` 声明顺序，依次放操作数、属性
         OpBuilder<(ins "::mlir::DenseElementsAttr":$value), [{
             build($_builder, $_state, value.getType(), value);
         }]>
