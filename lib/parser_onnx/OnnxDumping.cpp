@@ -20,7 +20,7 @@ std::unique_ptr<onnx::ModelProto>loadONNXModel(llvm::StringRef filename) {
         llvm::errs() << "Failed to parse ONNX model\n";
         return nullptr;
     }
-    llvm::errs() << "Model has " << model->graph().node_size() << " nodes\n";
+    // llvm::errs() << "Model has " << model->graph().node_size() << " nodes\n";
     return model;
 }
 

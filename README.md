@@ -267,7 +267,7 @@ mv onnx/onnx-ml.pb.cc /home/ubuntu/mlir-onnx/tensor-compiler/include/onnx
 项目是为了轻量化的实现ONNX算子到MLIR编译器的前端降级，不是做推理运行时，所以选择了自己做轻量解析。\
 一方面是架构解耦，把 ONNX 协议层和 MLIR 转换层拆开，中间用自定义的图结构隔离，后续扩展和维护都更灵活；另一方面是足够轻量，只依赖 protobuf，不用引入 ONNX Runtime 这种重型依赖，和 MLIR 构建系统也不会冲突。\
 在解析阶段可以做针对 MLIR 的定制预处理，比如常量提权合并到initializer \
-首先构建onnx的proto对应的数据结构，用于存储解析的信息
+首先构建onnx的proto对应的数据结构，用于存储解析的信息 \
 利用Protobuf库将onnx对应的将ModelProto解析为ModeInfo
 ```C++
 // include/tac/OnnxModelInfo.h
@@ -293,9 +293,14 @@ struct ModelInfo;
 仅支持Constant、MatMul、Relu、Add操作 \
 可以把onnx模型用python转成prototxt文本方便对比解析结果
 ```bash
+# onnxParseTest.cpp里面调用OnnxParser.cpp解析函数和OnnxDumping.cpp打印函数
+# 先编译生成测试程序
 cd build
 ninja
-./onnx_parse_test add_constant.onnx
+# 再调用py程序生成对应的ONNX模型
+bash ../generateOnnxModel.sh
+# 进行测试
+./onnx_parse_test ../tac_test/onnx_files/const_add.onnx
 
 # 输出
 # Model has 3 nodes
@@ -329,5 +334,82 @@ ninja
 # Graph outputs: 
 #    Value: final_out
 #        shape: [2]
+```
+
+### 3.3 ONNX解析后转换为MLIR的TAC方言
+确保ONNX的nodes是拓扑有序的 \
+将ONNX的基于字符串的数据流转换为MLIR基于Value的数据流 \
+核心是构建string到Value的map，主要步骤如下
+```C++
+// lib/parser_onnx/OnnxModelToMlir.cpp
+// mlir::OwningOpRef<mlir::ModuleOp> onnxModelToMlir(mlir::MLIRContext &context,ModelInfo &model)
+
+// 先构建一个mlir::Func::FuncOp用于将自定义的onnx模型包裹，便于后续的jit执行
+// 其中argTypes由graph的inputs信息生成
+llvm::SmallVector<mlir::Type, 4> argTypes;
+for(const auto &inputInfo :model.graph.inputs){
+    auto elementType = getMlirType(builder, inputInfo.elementType);
+    argTypes.push_back(mlir::RankedTensorType::get(inputInfo.shape,elementType));
+}
+
+auto func = mlir::func::FuncOp::create(
+    builder.getUnknownLoc(),"main",
+    builder.getFunctionType(argTypes,{})
+);
+
+// 添加 llvm.emit_c_interface 属性，生成C兼容调用入口，
+// 让外部C/C++程序能够直接调用该模型函数  
+func->setAttr(mlir::LLVM::LLVMDialect::getEmitCWrapperAttrName(),
+    builder.getUnitAttr());
+
+// 用于映射ONNX基于字符串的数据流到MLIR基于Value的数据流
+llvm::StringMap<mlir::Value> valueMap;
+
+// graph输入映射到FuncOp的起始块参数
+size_t n = model.graph.inputs.size();
+for (size_t i = 0; i < n; ++i) {
+    const auto &inputInfo = model.graph.inputs[i];
+    valueMap[inputInfo.name] = entry->getArgument(i);
+}
+
+// 然后再按顺序遍历nodes，解析onnx的时候要确保得到的model的graph的nodes是拓扑有序的
+if(!onnxNameToMlirValue(Ibuilder,model,valueMap)){
+    return nullptr;
+}
+
+// 最后插入returnOp，处理返回值和FuncOp的返回类型
+llvm::SmallVector<mlir::Value, 4> returnValues;
+llvm::SmallVector<mlir::Type, 4> returnTypes;
+
+for(const auto &outputInfo :model.graph.outputs){
+    if(valueMap.count(outputInfo.name)){
+        mlir::Value val = valueMap[outputInfo.name];
+        returnValues.push_back(val);
+        returnTypes.push_back(val.getType());
+    }else{
+        llvm::errs() << "Error: Graph output '" << outputInfo.name << "' not found!\n";
+        return nullptr;
+    }
+}
+
+Ibuilder.create<mlir::func::ReturnOp>(returnValues);
+func.setType(builder.getFunctionType(argTypes, returnTypes));
+```
+
+### 3.4 ONNX解析后转换为MLIR的TAC方言测试
+在onnxParseTest.cpp继续加入onnxModelToMlir转换函数，将解析Onnx模型得到model降级为mlir的tac方言，再进行输出
+```bash
+./onnx_parse_test ../tac_test/onnx_files/const_add.onnx --mlir
+
+# 输出结果
+# module {
+#   func.func @main(%arg0: tensor<2xf32>) -> tensor<2xf32> attributes {llvm.emit_c_interface} {
+#     %0 = tac.constant dense<[1.000000e+01, 2.000000e+01]> : tensor<2xf32> : tensor<2xf32>
+#     %1 = "tac.add"(%arg0, %0) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+#     %2 = tac.constant dense<1.000000e+00> : tensor<2xf32> : tensor<2xf32>
+#     %3 = "tac.add"(%1, %2) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+#     return %3 : tensor<2xf32>
+#   }
+# }
 ```
 
