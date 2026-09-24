@@ -6,7 +6,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 // 导入dialect
 #include "tac/TacDialect.h" 
-
+#include "tac/TacPasses.h"
 
 using namespace mlir;
 using namespace llvm;
@@ -18,5 +18,8 @@ int main(int argc,char **argv){
     
     registerCSEPass();
     registerCanonicalizerPass();
+
+    // 自定义pass
+    tac::registerPasses();
     return asMainReturnCode(MlirOptMain(argc,argv,"tac-opt",registry));
 }

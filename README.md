@@ -15,19 +15,21 @@ mlir-onnx
 注意，安装的时候要设置 PREFIX 为 install 目录，如下面所示，和 getting start 上的略有区别：
 ```bash
 # 使用当前MLIR稳定分支版本 22.1.8，只拉取对应标签的代码，国内镜像更快
-# 4核8G编译时经常内存爆掉，使用动态库替代默认静态库，以及单核编译
+# 4核8G编译时经常内存爆掉，使用单核编译以及lld链接器,编译目标：Native;NVPTX;AMDGPU（只选Native更快)
+# 也可以改成动态库，静态库编译很慢
 git clone --depth 1 --branch llvmorg-22.1.8 https://mirrors.bfsu.edu.cn/git/llvm-project.git
 cd llvm-project
 mkdir build && cd build
+
+apt install lld
 cmake -G Ninja ../llvm \
-  -DCMAKE_INSTALL_PREFIX=/mlir-onnx/install \
+  -DCMAKE_INSTALL_PREFIX=/home/ubuntu//mlir-onnx/install \
   -DLLVM_ENABLE_PROJECTS=mlir \
   -DLLVM_BUILD_EXAMPLES=ON \
-  -DLLVM_TARGETS_TO_BUILD="Native;NVPTX;AMDGPU" \
+  -DLLVM_TARGETS_TO_BUILD="Native" \
   -DCMAKE_BUILD_TYPE=Release \
   -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DBUILD_SHARED_LIBS=ON \
-  -DLLVM_USE_LINKER=gold
+  -DLLVM_USE_LINKER=lld
 ```
 在build完成之后，安装到prefix，耗时比较长，而且占用内存非常大
 ```bash
@@ -264,11 +266,8 @@ mv onnx/onnx-ml.pb.cc /home/ubuntu/mlir-onnx/tensor-compiler/include/onnx
 ```
 
 ### 3.2 自定义ONNX文件解析
-项目是为了轻量化的实现ONNX算子到MLIR编译器的前端降级，不是做推理运行时，所以选择了自己做轻量解析。\
-一方面是架构解耦，把 ONNX 协议层和 MLIR 转换层拆开，中间用自定义的图结构隔离，后续扩展和维护都更灵活；另一方面是足够轻量，只依赖 protobuf，不用引入 ONNX Runtime 这种重型依赖，和 MLIR 构建系统也不会冲突。\
-在解析阶段可以做针对 MLIR 的定制预处理，比如常量提权合并到initializer \
-首先构建onnx的proto对应的数据结构，用于存储解析的信息 \
-利用Protobuf库将onnx对应的将ModelProto解析为ModeInfo
+项目是为了轻量化的实现ONNX算子到MLIR编译器的前端降级，不是做推理运行时，所以选择了自己做轻量解析。在解析阶段将constant提权合并到initializer，方便后续转换为MLIR。
+首先构建onnx的proto对应的数据结构，用于存储解析的信息，然后利用Protobuf库将ModelProto解析为ModeInfo
 ```C++
 // include/tac/OnnxModelInfo.h
 // 存数据+形状+元素类型
@@ -288,10 +287,7 @@ struct ModelInfo;
 ```
 
 ### 3.2 ONNX文件解析测试
-使用python的onnx库，自定义model生成对应的onnx文件\
-然后使用OnnxParser进行解析和OnnxDumping输出 \
-仅支持Constant、MatMul、Relu、Add操作 \
-可以把onnx模型用python转成prototxt文本方便对比解析结果
+使用python的onnx库helper工具，自定义model生成对应的onnx文件，使用OnnxParser进行解析和OnnxDumping输出，目前仅支持Constant、MatMul、Relu、Add操作。
 ```bash
 # onnxParseTest.cpp里面调用OnnxParser.cpp解析函数和OnnxDumping.cpp打印函数
 # 先编译生成测试程序
@@ -337,9 +333,8 @@ bash ../generateOnnxModel.sh
 ```
 
 ### 3.3 ONNX解析后转换为MLIR的TAC方言
-确保ONNX的nodes是拓扑有序的 \
-将ONNX的基于字符串的数据流转换为MLIR基于Value的数据流 \
-核心是构建string到Value的map，主要步骤如下
+在转换ONNX解析得到的model转换为MLIR时，要确保model的graph的nodes是拓扑有序的 \
+转换核心是将ONNX的基于字符串的数据流映射为MLIR基于Value的数据流，主要步骤如下
 ```C++
 // lib/parser_onnx/OnnxModelToMlir.cpp
 // mlir::OwningOpRef<mlir::ModuleOp> onnxModelToMlir(mlir::MLIRContext &context,ModelInfo &model)
@@ -397,7 +392,7 @@ func.setType(builder.getFunctionType(argTypes, returnTypes));
 ```
 
 ### 3.4 ONNX解析后转换为MLIR的TAC方言测试
-在onnxParseTest.cpp继续加入onnxModelToMlir转换函数，将解析Onnx模型得到model降级为mlir的tac方言，再进行输出
+将解析Onnx模型得到model降级为mlir的tac方言，再进行输出
 ```bash
 ./onnx_parse_test ../tac_test/onnx_files/const_add.onnx --mlir
 

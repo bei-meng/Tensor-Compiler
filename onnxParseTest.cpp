@@ -4,6 +4,7 @@
 #include "tac/OnnxModelToMlir.h"
 #include "tac/TacDialect.h"
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"

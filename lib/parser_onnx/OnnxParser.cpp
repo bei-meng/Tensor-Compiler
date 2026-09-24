@@ -39,6 +39,8 @@ static TensorInfo parseTensor(const onnx::TensorProto &t){
     }
 
     // 提取值
+    // onnx的raw_data规范强制小端
+    // Protobuf协议中float存储编码时强制小端序，解析到内存时，还原为本机float数组，平台为小端序
     if(t.has_raw_data()){
         // 直接复制二进制值
         const std::string &bytes = t.raw_data();
