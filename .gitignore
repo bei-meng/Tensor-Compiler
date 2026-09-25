@@ -5,4 +5,8 @@ tac_test/proto_files
 tac_test/onnx_to_mlir
 tac_test/onnx_dump
 tac_test/mlir
-tac_test/driver_test
+# tac_test/driver_test
+tac_test/driver_test/Conversion/Output
+tac_test/driver_test/Correctness/Output
+tac_test/driver_test/error-handling/Output
+tac_test/driver_test/Execution/Output

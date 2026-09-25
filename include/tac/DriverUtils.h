@@ -24,8 +24,9 @@ enum Action {
 extern cl::list<float> inputDataList;
 extern cl::list<std::string> inputFiles;
 extern cl::opt<std::string> inputFilename;
-extern cl::opt<bool> runTiling;
+extern cl::opt<std::string> runTiling;
 extern cl::opt<bool> runTranspose;
+extern cl::opt<bool> runExchange;
 extern cl::opt<bool> runOpFusion;
 extern cl::opt<enum Action> emitAction;
 

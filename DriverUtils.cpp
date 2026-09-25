@@ -28,17 +28,24 @@ cl::opt<std::string> inputFilename(
     cl::value_desc("filename")
 );
 
-cl::opt<bool> runTiling(
+cl::opt<std::string> runTiling(
     "tiling",
     cl::desc("Enable tiling optimization"),
-    cl::init(false)
+    cl::init("64,64,64")
 );
 
 cl::opt<bool> runTranspose(
     "transpose",
-    cl::desc("Enable B-transpose optimization"),
+    cl::desc("Enable B[K,N] -> B[N,K]"),
     cl::init(false)
 );
+
+cl::opt<bool> runExchange(
+    "exchange",
+    cl::desc("Enable exchange ijk -> ikj"),
+    cl::init(false)
+);
+
 
 cl::opt<bool> runOpFusion(
     "op-fusion",

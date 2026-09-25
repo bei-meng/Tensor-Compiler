@@ -90,7 +90,14 @@ namespace{
         if(emitAction >= DumpMLIRTensor){
             tac::LowerToTensorOptions opt;
             opt.useTranspose = runTranspose;  
+            opt.useExchange = runExchange;
             pm.addPass(tac::createLowerToTensorPass(opt));
+            if (runTiling != "False") {
+                tac::LinalgTilingOptions optSize;
+                optSize.tileSize = runTiling;
+                pm.addPass(tac::createLinalgTilingPass(optSize));
+            }
+            
             pm.addPass(mlir::createCanonicalizerPass());
             pm.addPass(mlir::createCSEPass());
         }

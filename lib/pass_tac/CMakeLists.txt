@@ -9,6 +9,7 @@ add_public_tablegen_target(MLIRTacTransformsIncGen)
 add_mlir_library(MLIRTacTransforms
   LowerToTensor.cpp
   LowerToLLVM.cpp
+  LinalgTiling.cpp
 
   DEPENDS
   MLIRTacTransformsIncGen

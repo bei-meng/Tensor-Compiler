@@ -7,13 +7,14 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LogicalResult.h"
-#include "tac/TacDialect.h"
-#include "tac/TacOps.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include <cstddef>
 #include <cstdint>
 #include <utility>
+
+#include "tac/TacDialect.h"
+#include "tac/TacOps.h"
 #define GEN_PASS_DEF_LOWERTOTENSOR
 #include "tac/TacPasses.h"
 
@@ -148,8 +149,9 @@ struct ReluOpLowering : OpConversionPattern<tac::ReluOp>{
 //===----------------------------------------------------------------------===//
 struct MatMulOpLowering : OpConversionPattern<tac::MatMulOp>{
     bool useTransposeB;
-    MatMulOpLowering(MLIRContext *context, bool useTransposeB):
-        OpConversionPattern<tac::MatMulOp>(context),useTransposeB(useTransposeB){}
+    bool useExchange;
+    MatMulOpLowering(MLIRContext *context, bool useTransposeB,bool useExchange):
+        OpConversionPattern<tac::MatMulOp>(context),useTransposeB(useTransposeB),useExchange(useExchange){}
 
     // 张量升维度
     Value rank1ToRank2(Value val,const Location loc,
@@ -238,6 +240,70 @@ struct MatMulOpLowering : OpConversionPattern<tac::MatMulOp>{
         Value matmul_results;
 
         if(useTransposeB){
+            // 定义转置后的形状和空张量运算符
+            SmallVector<int64_t> transpShape = {N,K};
+            auto transpInit = tensor::EmptyOp::create(
+                rewriter,
+                loc,
+                transpShape,
+                resultType.getElementType()
+            );
+            // 定义维度置换规则 B[K,N] -> B_T[N,K]
+            SmallVector<int64_t> perm = {1,0};
+            auto transposedB = linalg::TransposeOp::create(
+                rewriter,
+                loc,
+                rhs,
+                transpInit.getResult(),
+                perm
+            );
+            // 定义索引映射：A[M,K] * B_T[N,K] - C[M,N]
+            // Map 0 (A):       (m,n,k) -> (m,k)
+            // Map 1 (B_T):     (m,n,k) -> (n,k)
+            // Map 2 (C):       (m,n,k) -> (m,n)
+            // 保证创建的仿射映射和当前 IR 图在同一个上下文中
+            // results定义输出的每个索引，分别对应输入的哪个维度表达式
+            auto mapA = AffineMap::get(3,0,
+                {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(2)},
+                rewriter.getContext()
+            );
+            auto mapB = AffineMap::get(3,0,
+                {rewriter.getAffineDimExpr(1),rewriter.getAffineDimExpr(2)},
+                rewriter.getContext()
+            );
+            auto mapC = AffineMap::get(3,0,
+                {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(1)},
+                rewriter.getContext()
+            );
+            SmallVector<AffineMap> maps = {mapA, mapB, mapC};
+
+            // - `parallel`：并行维度，循环间无依赖，可并行执行。输出矩阵的行 `m`、列 `n` 每个点的计算互相独立，因此标记为并行。
+            // - `reduction`：规约维度，循环内有累加依赖，不能直接并行。`k` 是矩阵乘的乘加累加维度，因此标记为规约
+            SmallVector<utils::IteratorType>iterTypes = {
+                utils::IteratorType::parallel,  // m
+                utils::IteratorType::parallel,  // n 
+                utils::IteratorType::reduction  // k 
+            };
+
+            SmallVector<Value> genericIputs = {lhs,transposedB.getResults()[0]};
+
+            auto genericOp = linalg::GenericOp::create(
+                rewriter,
+                loc,
+                resultType,
+                ValueRange{genericIputs},
+                ValueRange{fill_results},
+                maps,
+                iterTypes,
+                [](OpBuilder &b,Location l,ValueRange args){
+                    Value mul = arith::MulFOp::create(b,l,args[0],args[1]);
+                    Value add = arith::AddFOp::create(b,l,args[2],mul);
+                    linalg::YieldOp::create(b,l,add);
+                }
+            );
+
+            matmul_results = genericOp.getResult(0);
+        }else if(useExchange){
             // 定义索引映射：A[M,K] * B[K,N] -> C[M,N]
             // Map 0 (A):       (m,k,n) -> (m,k)
             // Map 1 (B):       (m,k,n) -> (k,n)
@@ -346,7 +412,7 @@ struct LowerToTensorPass :
             ReluOpLowering
         >(&getContext());
 
-        patterns.add<MatMulOpLowering>(&getContext(), useTranspose);
+        patterns.add<MatMulOpLowering>(&getContext(), useTranspose,useExchange);
         if(failed(applyPartialConversion(
             getOperation(),
             tgt,
