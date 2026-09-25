@@ -75,9 +75,7 @@ void dumpValueInfo(const tac::ValueInfo &v) {
     llvm::outs() << "]\n";
 }
 
-void dumpPROTO(const onnx::ModelProto &model) {
-    tac::ModelInfo modelInfo = tac::parseModelProto(model);
-
+void dumpPROTO(const tac::ModelInfo &modelInfo) {
     llvm::outs() << "ONNX Model\n";
     llvm::outs() << "  IR Version: " << modelInfo.ir_version << "\n";
     llvm::outs() << "  Producer: " << modelInfo.producer_name << "\n";

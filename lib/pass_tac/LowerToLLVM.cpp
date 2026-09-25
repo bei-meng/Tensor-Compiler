@@ -26,12 +26,23 @@
 
 
 using namespace mlir;
+
+namespace {
 // 声明这是一个以整个模块ModuleOp为单位执行的Pass
 // 每次处理一个完整的 MLIR 模块
 struct LowerToLLVMPass:mlir::PassWrapper<LowerToLLVMPass,
     OperationPass<ModuleOp>>{
     MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerToLLVMPass)
 
+    // 命令行调用的开关名，对应 --lower-to-llvm
+    StringRef getArgument() const final { return "LowerToLLVM"; }
+    // Pass 的可读名称，用于日志和调试
+    StringRef getName() const final { return "LowerToLLVMPass"; }
+    // Pass 功能描述，--help 时会展示
+    StringRef getDescription() const final { 
+        return "Lower SCF + Arith + MemRef + Func dialects to LLVM dialect"; 
+    }
+    
     void getDependentDialects(DialectRegistry &registry)const override{
         registry.insert<
             LLVM::LLVMDialect,
@@ -80,6 +91,8 @@ struct LowerToLLVMPass:mlir::PassWrapper<LowerToLLVMPass,
         }
     }
 };
+
+}
 
 std::unique_ptr<mlir::Pass> tac::createLowerToLLVMPass(){
     return std::make_unique<LowerToLLVMPass>();

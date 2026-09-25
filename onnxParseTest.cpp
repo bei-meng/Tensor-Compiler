@@ -3,6 +3,7 @@
 #include "tac/OnnxDumping.h"
 #include "tac/OnnxModelToMlir.h"
 #include "tac/TacDialect.h"
+#include "tac/DriverUtils.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -49,7 +50,7 @@ int main(int argc, char** argv) {
 
     // 按需打印onnx proto dump
     if (enable_dump_proto) {
-        tac::dumpPROTO(*modelProto);
+        tac::dumpPROTO(modelInfo);
     }
 
     // 3. 转MLIR

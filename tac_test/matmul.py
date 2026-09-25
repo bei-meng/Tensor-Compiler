@@ -19,6 +19,8 @@ def create_large_matmul(dim):
     with open(f"proto_files/matmul_{dim}.onnx", "w") as f:
         f.write(str(model))
 
+create_large_matmul(128)
+create_large_matmul(256)
 create_large_matmul(512)
 create_large_matmul(1024)
 create_large_matmul(2048)

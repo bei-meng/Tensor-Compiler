@@ -11,7 +11,7 @@ namespace onnx {
 
 namespace tac {
 std::unique_ptr<onnx::ModelProto> loadONNXModel(llvm::StringRef filename);
-void dumpPROTO(const onnx::ModelProto &model);
+void dumpPROTO(const tac::ModelInfo &modelInfo);
 void dumpTensor(const tac::TensorInfo &t);
 void dumpValueInfo(const tac::ValueInfo &v);
 }   // namespace tac

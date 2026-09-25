@@ -237,7 +237,7 @@ build目录下使用tac-opt工具能正确读取和输出，说明方言和算�
 # }
 ```
 
-## 3. ONNX模型解析
+## 3. ONNX模型计算图解析->自定义TAC方言生成
 只做结构读取和信息提取，不涉及运行时\
 ONNX模型文件 → 前端解析 → 中间表示优化/降级
 ### 3.1 C++ Protobuf库
@@ -332,7 +332,7 @@ bash ../generateOnnxModel.sh
 #        shape: [2]
 ```
 
-### 3.3 ONNX解析后转换为MLIR的TAC方言
+### 3.3 ONNX模型 -> MLIR的TAC方言
 在转换ONNX解析得到的model转换为MLIR时，要确保model的graph的nodes是拓扑有序的 \
 转换核心是将ONNX的基于字符串的数据流映射为MLIR基于Value的数据流，主要步骤如下
 ```C++
@@ -391,7 +391,7 @@ Ibuilder.create<mlir::func::ReturnOp>(returnValues);
 func.setType(builder.getFunctionType(argTypes, returnTypes));
 ```
 
-### 3.4 ONNX解析后转换为MLIR的TAC方言测试
+### 3.4 测试
 将解析Onnx模型得到model降级为mlir的tac方言，再进行输出
 ```bash
 ./onnx_parse_test ../tac_test/onnx_files/const_add.onnx --mlir
@@ -407,4 +407,79 @@ func.setType(builder.getFunctionType(argTypes, returnTypes));
 #   }
 # }
 ```
+
+
+## 4.TAC 方言 → MLIR 标准张量计算方言
+自定义算子接入 MLIR 官方编译生态：通过模式重写将 TAC 方言的高层算子对齐到标准张量计算栈，再经分层降级逐步降低抽象层级，最终转换为可执行的底层 IR。
+
+### 4.1 TAC 方言转换 Tensor/Linalg
+基于 MLIR 的`PatternRewriter`模式重写机制，将 TAC 方言算子逐一对齐到「Tensor + Arith + Linalg」官方标准方言，在完整保留计算语义的前提下，接入 MLIR 原生优化流水线。各算子映射规则如下：
+
+| TAC 算子 | 目标标准算子 | 说明 |
+| --- | --- | --- |
+| `tac.constant` | `arith.constant` | 常量算子直接映射到算术方言常量，保留张量数值与类型，作为计算图的叶子节点 |
+| `tac.add` | `linalg.add` | 逐元素加法映射到 Linalg 原生逐元素算子，由框架统一处理形状语义 |
+| `tac.relu` | `linalg.max` | ReLU 算子（`y = max(x, 0)`）有两种降级方案：1. 通用方案：通过 `linalg.generic` 自定义仿射索引映射与计算逻辑，灵活性强但需手动处理 AffineMap，实现成本更高2. 简洁方案：直接与零常量做逐元素取大，复用原生算子优化。|
+| `tac.matmul` | `linalg.matmul` | 矩阵乘算子直接映射到 Linalg 原生矩阵乘算子 |
+
+可以通过tac-opt工具观察转换结果
+```bash
+# constant.mlir文件内容
+# func.func @test_all_ops() -> tensor<2x2xf32> {
+#   %c1 = "tac.constant"() {value = dense<[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]> : tensor<2x3xf32>} : () -> tensor<2x3xf32>
+#   %c2 = "tac.constant"() {value = dense<[[0.5, 1.0, 1.5], [2.0, 2.5, 3.0]]> : tensor<2x3xf32>} : () -> tensor<2x3xf32>
+#   %add = "tac.add"(%c1, %c2) : (tensor<2x3xf32>, tensor<2x3xf32>) -> tensor<2x3xf32>
+#   %relu = "tac.relu"(%add) : (tensor<2x3xf32>) -> tensor<2x3xf32>
+#   %c3 = "tac.constant"() {value = dense<[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]> : tensor<3x2xf32>} : () -> tensor<3x2xf32>
+#   %matmul = "tac.matmul"(%relu, %c3) : (tensor<2x3xf32>, tensor<3x2xf32>) -> tensor<2x2xf32>
+#   return %matmul : tensor<2x2xf32>
+# }
+
+./tac-opt --LowerToTensor ../tac_test/mlir/constant.mlir
+
+输出
+# module {
+#   func.func @test_all_ops() -> tensor<2x2xf32> {
+#     %cst = arith.constant dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32>
+#     %cst_0 = arith.constant dense<[[5.000000e-01, 1.000000e+00, 1.500000e+00], [2.000000e+00, 2.500000e+00, 3.000000e+00]]> : tensor<2x3xf32>
+#     %0 = tensor.empty() : tensor<2x3xf32>
+#     %1 = linalg.add ins(%cst, %cst_0 : tensor<2x3xf32>, tensor<2x3xf32>) outs(%0 : tensor<2x3xf32>) -> tensor<2x3xf32>
+#     %cst_1 = arith.constant 0.000000e+00 : f32
+#     %2 = tensor.empty() : tensor<2x3xf32>
+#     %3 = linalg.max ins(%1, %cst_1 : tensor<2x3xf32>, f32) outs(%2 : tensor<2x3xf32>) -> tensor<2x3xf32>
+#     %cst_2 = arith.constant dense<[[1.000000e+00, 0.000000e+00], [0.000000e+00, 1.000000e+00], [1.000000e+00, 1.000000e+00]]> : tensor<3x2xf32>
+#     %4 = tensor.empty() : tensor<2x2xf32>
+#     %cst_3 = arith.constant 0.000000e+00 : f32
+#     %5 = linalg.fill ins(%cst_3 : f32) outs(%4 : tensor<2x2xf32>) -> tensor<2x2xf32>
+#     %6 = linalg.matmul ins(%3, %cst_2 : tensor<2x3xf32>, tensor<3x2xf32>) outs(%5 : tensor<2x2xf32>) -> tensor<2x2xf32>
+#     return %6 : tensor<2x2xf32>
+#   }
+# }
+```
+
+
+### 4.2 降级流水线
+完成张量层转换后，遵循「**值语义 → 内存语义 → 控制流 → 底层 IR**」的分层降级思路，逐步降低抽象层级，最终生成原生 LLVM IR。完整流水线对应`driver.cpp`中的`processMLIR`和`RunFunc`函数，完整路径如下：
+```
+TAC方言 → Tensor/Linalg → MemRef → Affine循环 → SCF → CF控制流 → LLVM方言 → 原生LLVM IR
+```
+1. Tensor 值语义 → MemRef 内存语义
+**缓冲化（Bufferization）**转换：采用`OneShotBufferize`一次性缓冲化方案，将所有值语义的 Tensor 算子转换为带完整元数据（数据指针、偏移、各维度形状、步长）的 MemRef 内存引用算子。
+2. Linalg 算子 → Affine 循环
+通过`ConvertLinalgToLoops` Pass，将`linalg.matmul`这类声明式高层算子，拆解为仿射（Affine）嵌套循环 + 逐元素内存读写，从 “声明式计算定义” 转换为 “命令式执行逻辑”。
+3. Affine 循环 → SCF 结构化控制流
+通过`LowerAffine` Pass 将仿射循环降级为 SCF（结构化控制流）方言。
+4. SCF → CF 底层控制流
+结构化控制流进一步降级为 CF（ControlFlow）底层控制流方言，以基础跳转指令表达分支、循环逻辑。
+5. 全方言 → LLVM 方言
+将所有算子与类型统一降级为 MLIR 体系内的 LLVM 方言，完成类型系统、调用约定、内存模型向 LLVM 语义的对齐。
+6. LLVM 方言 → 原生 LLVM IR
+通过 MLIR 内置翻译接口，转换为标准 LLVM IR。
+
+### 4.3 测试及验证
+1. JIT 执行正确性验证
+按照 MLIR 标准 MemRef 描述符格式构造输入输出数据，封装数据指针、形状、步长等元数据。
+基于 MLIR `ExecutionEngine` + LLVM JIT 即时编译执行，将运行结果与 ONNX Runtime 官方基准结果做逐元素对比。
+2. 性能与访存验证
+集成 Valgrind Cachegrind 工具，统计各级 CPU 缓存命中率、访存次数，量化验证矩阵分块、转置等优化带来的访存性能提升，输出计算耗时。
 

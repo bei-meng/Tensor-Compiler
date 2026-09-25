@@ -17,9 +17,24 @@ add_mlir_library(MLIRTacTransforms
   LINK_LIBS PUBLIC
   MLIRTacDialect
 
-  MLIRArithDialect 
+  MLIRArithDialect
   MLIRTensorDialect
   MLIRLinalgDialect
+  MLIRFuncDialect
+  MLIRTransforms
+  
+  # LLVM 方言核心
+  MLIRLLVMDialect
+  # LLVM 转换公共基础
+  MLIRLLVMCommonConversion
+  # 各子转换实现
+  MLIRSCFToControlFlow
+  MLIRArithToLLVM
+  MLIRMemRefToLLVM
+  MLIRControlFlowToLLVM
+  MLIRFuncToLLVM
+  # ControlFlow 方言定义
+  MLIRControlFlowDialect
 )
 
 target_include_directories(MLIRTacTransforms

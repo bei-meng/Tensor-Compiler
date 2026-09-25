@@ -58,7 +58,7 @@ LogicalResult AddOp::verify(){
     auto lhsType = 
         llvm::cast<RankedTensorType>(getLhs().getType());
     auto rhsType = 
-        llvm::cast<RankedTensorType>(getResult().getType());
+        llvm::cast<RankedTensorType>(getRhs().getType());
     auto resType = 
         llvm::cast<RankedTensorType>(getResult().getType());
     

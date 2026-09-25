@@ -48,3 +48,88 @@ target_link_libraries(onnx_parse_test
     PRIVATE
         tac_onnx_parser
 )
+
+# ==== jit运行测试 ====
+add_executable(driver
+    driver.cpp
+    DriverUtils.cpp
+)
+
+target_compile_options(driver PRIVATE
+  -fno-rtti
+  -fno-exceptions
+)
+
+set(llvm_components
+    Core
+    Support
+    OrcJIT
+    Analysis
+    ExecutionEngine
+)
+
+list(APPEND llvm_components native)
+
+llvm_map_components_to_libnames(llvm_libs ${llvm_components})
+
+target_link_libraries(driver
+    PRIVATE
+        MLIRTacDialect
+        MLIRTacTransforms
+        tac_onnx_parser
+        # MLIR Libraries
+
+        # Dialects
+        MLIRPass
+        MLIRTransforms
+        MLIRLinalgDialect
+        MLIRTensorDialect
+        MLIRArithDialect
+        MLIRMemRefDialect
+        MLIRBufferizationDialect
+        MLIRFuncDialect
+        MLIRAffineDialect
+
+        # Transformation & Bufferization Logic
+        MLIRBufferizationTransforms
+        MLIRLinalgTransforms
+        MLIRTensorTransforms
+        MLIRArithTransforms
+        MLIRAffineTransforms
+
+        # MLIRGen
+        MLIRIR
+        MLIRParser
+        MLIRBytecodeReader
+        MLIRAsmParser
+        MLIRSupport
+
+        # MLIR Translation & Execution Engine (emit llvm ir)
+        MLIRTargetLLVMIRExport
+        MLIRToLLVMIRTranslationRegistration
+        MLIRExecutionEngine
+
+        # Tiling
+        MLIRSCFDialect
+        MLIRSCFTransforms
+        MLIRValueBoundsOpInterface
+        MLIRArithUtils
+        MLIRLinalgUtils
+        MLIRTensorUtils
+        MLIRDialectUtils
+        MLIRArithValueBoundsOpInterfaceImpl
+
+        # Conversion
+        MLIRLLVMCommonConversion
+        MLIRLLVMDialect
+        MLIRSCFToControlFlow
+        MLIRArithToLLVM
+        MLIRMemRefToLLVM
+        MLIRControlFlowToLLVM
+        MLIRFuncToLLVM
+        MLIRReconcileUnrealizedCasts
+        MLIRAffineToStandard
+
+        # LLVM Libraries
+        ${llvm_libs}
+)

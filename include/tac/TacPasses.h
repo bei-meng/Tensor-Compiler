@@ -19,7 +19,7 @@ namespace tac {
     #include "TacPasses.h.inc"
     std::unique_ptr<mlir::Pass> createLowerToTensorPass(LowerToTensorOptions options={});
     std::unique_ptr<mlir::Pass> createLowerToLLVMPass();
-    // std::unique_ptr<mlir::Pass> createLinalgTilingPass();
+    std::unique_ptr<mlir::Pass> createLinalgTilingPass();
 
     #define GEN_PASS_REGISTRATION
     #include "TacPasses.h.inc"

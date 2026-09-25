@@ -1,4 +1,6 @@
-add_mlir_tool(tac-opt tac-opt.cpp)
+add_mlir_tool(tac-opt
+    tac-opt.cpp
+)
 target_link_libraries(
     tac-opt
     PRIVATE 
@@ -12,4 +14,6 @@ target_link_libraries(
     MLIRSupport
     MLIRIR
     MLIRParser
+
+    ${LLVM_REQUIRED_LIBS}
 )

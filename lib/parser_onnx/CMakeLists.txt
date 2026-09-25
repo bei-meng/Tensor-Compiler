@@ -28,7 +28,4 @@ target_link_libraries(tac_onnx_parser
     MLIRFuncDialect
     MLIRLLVMDialect
     MLIRInferTypeOpInterface
-
-    
-
 )
