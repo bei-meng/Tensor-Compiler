@@ -21,8 +21,38 @@
 [维度交换]相比[转置]更快，因为多出来的读指令C[M,N]都是L1命中，延迟极低，最内层依赖链更短，指令级并行（ILP）翻倍，**迭代之间没有循环携带依赖**。CPU 可以同时发射多条乘加指令，利用多个浮点执行单元并行计算，浮点吞吐量显著提升。\
 比较反常的是[分块]降低了效率，可以发现虽然L2数据缓存读缺失次数减少10多倍，但是分块带来的「循环控制开销、内层向量化损失、地址计算开销」总和，超过了「内存延迟减少」带来的收益，所以整体时间反而上升。短循环破坏了编译器向量化，x86 内存延迟低，内存收益权重小
 
-## 1.环境配置
-### 1.1 MLIR库安装
+- [Tensor-Compiler](#tensor-compiler)
+  - [1.环境配置](#1环境配置)
+    - [1.1 MLIR库安装](#11-mlir库安装)
+    - [1.2 配置clangd插件](#12-配置clangd插件)
+    - [1.3 主体目录环境](#13-主体目录环境)
+  - [2. tac方言](#2-tac方言)
+    - [2.1 tac方言定义](#21-tac方言定义)
+    - [2.2 tac\_op定义](#22-tac_op定义)
+    - [2.3 tac方言实现](#23-tac方言实现)
+    - [2.4 tac-opt工具](#24-tac-opt工具)
+    - [2.5 tac方言测试](#25-tac方言测试)
+  - [3. ONNX模型计算图解析为TAC方言](#3-onnx模型计算图解析为tac方言)
+    - [3.1 C++ Protobuf库](#31-c-protobuf库)
+    - [3.2 自定义ONNX模型解析](#32-自定义onnx模型解析)
+    - [3.3 ONNX模型解析测试](#33-onnx模型解析测试)
+    - [3.4 ONNX模型转TAC方言](#34-onnx模型转tac方言)
+    - [3.5 ONNX模型转TAC方言测试](#35-onnx模型转tac方言测试)
+  - [4.tac方言降级](#4tac方言降级)
+    - [4.1 tac方言转Tensor\_Linalg](#41-tac方言转tensor_linalg)
+    - [4.2 降级流水线](#42-降级流水线)
+    - [4.3 测试及验证](#43-测试及验证)
+  - [5. Pass设计优化IR](#5-pass设计优化ir)
+    - [5.1 矩阵转置](#51-矩阵转置)
+    - [5.2 维度交换](#52-维度交换)
+    - [5.3 矩阵分块](#53-矩阵分块)
+    - [5.4 测试及缓存分析](#54-测试及缓存分析)
+
+
+
+
+## 1.<a name='环境配置'></a>环境配置
+### 1.1 <a name='MLIR库安装'></a>MLIR库安装
 平台：Ubuntu 22.04.5 LTS \
 mlir项目工程模版：
 ```
@@ -68,7 +98,7 @@ source ~/.bashrc
 which mlir-opt
 ```
 
-### 1.2 配置clangd插件
+### 1.2 <a name='配置clangd插件'></a>配置clangd插件
 有时候，mlir 的编译选项与 clangd 冲突，在 tensor-compiler 目录下建立 .clangd 文件，去掉相关的选项：
 ```
 CompileFlags:
@@ -76,21 +106,24 @@ CompileFlags:
     - -fno-lifetime-dse
 ```
 
-### 1.3 完整目录环境
+### 1.3 <a name='主体目录环境'></a>主体目录环境
 ```
 ├── build                   # 编译文件夹 
 ├── include                 
+│   ├── onnx                # protobuf库文件，解析ONNX需要
 │   └── tac                 # tac方言的头文件
 ├── lib
 │   ├── dialect_tac         # tac方言定义的td文件和实现cpp
+│   ├── parser_onnx         # ONNX文件解析转换为tac方言
 │   └── pass_tac            # tac方言的转换和优化pass的td文件和实现
+├── tac_test                # 测试文件夹
 ├── tools                   # tac-opt实现，方便测试
 ├── README.md
 └── LICENSE
 ```
 
-## 2. tac方言
-### 2.1 tac方言定义
+## 2. <a name='tac方言'></a>tac方言
+### 2.1 <a name='tac方言定义'></a>tac方言定义
 在 lib/dialect_tac 文件夹创建 TacDialect.td \
 在 include/tac 文件夹创建 TacDialect.h \
 其中 TacDialect.h.inc 为mlir按照TacDialect.td自动生成的文件
@@ -115,7 +148,7 @@ def TacDialect : Dialect{
 
 ```
 
-### 2.2 tac op定义
+### 2.2 <a name='tac_op定义'></a>tac_op定义
 在 lib/dialect_tac 文件夹创建 TacOps.td \
 在 include/tac 文件夹创建 TacOps.h \
 这里创建了一个constant的op，用于将字面值转换为一个SSA值，数据作为属性挂载在算子上。 \
@@ -168,7 +201,7 @@ def ConstantOp : TacOp<"constant",[Pure]>{
 #include "TacOps.h.inc"         // 3. TableGen生成的Op声明文件（构建目录下，通过搜索路径找到）
 ```
 
-### 2.3 tac方言实现
+### 2.3 <a name='tac方言实现'></a>tac方言实现
 在 lib/dialect_tac 文件夹创建 tac.cpp
 ```mlir
 #include "tac/TacDialect.h"
@@ -204,7 +237,7 @@ LogicalResult ConstantOp::verify() {
 }
 ```
 
-### 2.4 tac-opt工具
+### 2.4 <a name='tac-opt工具'></a>tac-opt工具
 tac-opt工具能方便在命令行测试 \
 在 tools 文件夹创建 tac-opt.cpp
 ```mlir
@@ -228,7 +261,7 @@ int main(int argc,char **argv){
 }
 ```
 
-### 2.5 编译和测试
+### 2.5 <a name='tac方言测试'></a>tac方言测试
 在build目录下面使用ninja工具进行编译
 ```bash
 cd build
@@ -257,10 +290,10 @@ build目录下使用tac-opt工具能正确读取和输出，说明方言和算�
 # }
 ```
 
-## 3. ONNX模型计算图解析->自定义TAC方言生成
+## 3. <a name='ONNX模型计算图解析为TAC方言'></a>ONNX模型计算图解析为TAC方言
 只做结构读取和信息提取，不涉及运行时\
 ONNX模型文件 → 前端解析 → 中间表示优化/降级
-### 3.1 C++ Protobuf库
+### 3.1 <a name='C++_Protobuf库'></a>C++ Protobuf库
 ONNX 模型文件本质是 Protobuf 序列化数据，C++ 读取、解析onnx文件，需要 C++ Protobuf 库。\
 首先安装protoc(protobuf编译器)
 ```bash
@@ -285,7 +318,7 @@ mv onnx/onnx-ml.pb.h /home/ubuntu/mlir-onnx/tensor-compiler/include/onnx
 mv onnx/onnx-ml.pb.cc /home/ubuntu/mlir-onnx/tensor-compiler/include/onnx
 ```
 
-### 3.2 自定义ONNX文件解析
+### 3.2 <a name='自定义ONNX模型解析'></a>自定义ONNX模型解析
 项目是为了轻量化的实现ONNX算子到MLIR编译器的前端降级，不是做推理运行时，所以选择了自己做轻量解析。在解析阶段将constant提权合并到initializer，方便后续转换为MLIR。
 首先构建onnx的proto对应的数据结构，用于存储解析的信息，然后利用Protobuf库将ModelProto解析为ModeInfo
 ```C++
@@ -306,7 +339,7 @@ struct ModelInfo;
 // lib/parser_onnx/OnnxDumping.cpp 解析结果输出
 ```
 
-### 3.2 ONNX文件解析测试
+### 3.3 <a name='ONNX模型解析测试'></a>ONNX模型解析测试
 使用python的onnx库helper工具，自定义model生成对应的onnx文件，使用OnnxParser进行解析和OnnxDumping输出，目前仅支持Constant、MatMul、Relu、Add操作。
 ```bash
 # onnxParseTest.cpp里面调用OnnxParser.cpp解析函数和OnnxDumping.cpp打印函数
@@ -352,7 +385,7 @@ bash ../generateOnnxModel.sh
 #        shape: [2]
 ```
 
-### 3.3 ONNX模型 -> MLIR的TAC方言
+### 3.4 <a name='ONNX模型转TAC方言'></a>ONNX模型转TAC方言
 在转换ONNX解析得到的model转换为MLIR时，要确保model的graph的nodes是拓扑有序的 \
 转换核心是将ONNX的基于字符串的数据流映射为MLIR基于Value的数据流，主要步骤如下
 ```C++
@@ -411,28 +444,34 @@ Ibuilder.create<mlir::func::ReturnOp>(returnValues);
 func.setType(builder.getFunctionType(argTypes, returnTypes));
 ```
 
-### 3.4 测试
+### 3.5 <a name='ONNX模型转TAC方言测试'></a>ONNX模型转TAC方言测试
 将解析Onnx模型得到model降级为mlir的tac方言，再进行输出
 ```bash
-./onnx_parse_test ../tac_test/onnx_files/const_add.onnx --mlir
+./onnx_parse_test ../tac_test/onnx_files/const_add_relu_matmul_2x1.onnx --mlir
 
 # 输出结果
 # module {
-#   func.func @main(%arg0: tensor<2xf32>) -> tensor<2xf32> attributes {llvm.emit_c_interface} {
-#     %0 = tac.constant dense<[1.000000e+01, 2.000000e+01]> : tensor<2xf32> : tensor<2xf32>
+#   func.func @main(%arg0: tensor<2xf32>) -> tensor<1xf32> attributes {llvm.emit_c_interface} {
+#     %0 = tac.constant dense<[-0.686011254, 0.589478493]> : tensor<2xf32> : tensor<2xf32>
 #     %1 = "tac.add"(%arg0, %0) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
 #     %2 = tac.constant dense<1.000000e+00> : tensor<2xf32> : tensor<2xf32>
 #     %3 = "tac.add"(%1, %2) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
-#     return %3 : tensor<2xf32>
+#     %4 = tac.relu %3 : tensor<2xf32>
+#     %5 = tac.constant dense<[[1.04496622], [1.04839361]]> : tensor<2x1xf32> : tensor<2x1xf32>
+#     %6 = "tac.matmul"(%4, %5) : (tensor<2xf32>, tensor<2x1xf32>) -> tensor<1xf32>
+#     return %6 : tensor<1xf32>
 #   }
 # }
+
+
 ```
 
 
-## 4.TAC 方言 → MLIR 标准张量计算方言
+## 4.<a name='tac方言降级'></a>tac方言降级
+TAC 方言 → MLIR 标准张量计算方言\
 自定义算子接入 MLIR 官方编译生态：通过模式重写将 TAC 方言的高层算子对齐到标准张量计算栈，再经分层降级逐步降低抽象层级，最终转换为可执行的底层 IR。
 
-### 4.1 TAC 方言转换 Tensor/Linalg
+### 4.1 <a name='tac方言转Tensor_Linalg'></a>tac方言转Tensor_Linalg
 基于 MLIR 的`PatternRewriter`模式重写机制，将 TAC 方言算子逐一对齐到「Tensor + Arith + Linalg」官方标准方言，在完整保留计算语义的前提下，接入 MLIR 原生优化流水线。各算子映射规则如下：
 
 | TAC 算子 | 目标标准算子 | 说明 |
@@ -478,7 +517,7 @@ func.setType(builder.getFunctionType(argTypes, returnTypes));
 ```
 
 
-### 4.2 降级流水线
+### 4.2 <a name='降级流水线'></a>降级流水线
 完成张量层转换后，遵循「**值语义 → 内存语义 → 控制流 → 底层 IR**」的分层降级思路，逐步降低抽象层级，最终生成原生 LLVM IR。完整流水线对应`driver.cpp`中的`processMLIR`和`RunFunc`函数，完整路径如下：
 ```
 TAC方言 → Tensor/Linalg → MemRef → Affine循环 → SCF → CF控制流 → LLVM方言 → 原生LLVM IR
@@ -496,7 +535,7 @@ TAC方言 → Tensor/Linalg → MemRef → Affine循环 → SCF → CF控制流 
 6. LLVM 方言 → 原生 LLVM IR
 通过 MLIR 内置翻译接口，转换为标准 LLVM IR。
 
-### 4.3 测试及验证
+### 4.3 <a name='测试及验证'></a>测试及验证
 1. JIT 执行正确性验证
 按照 MLIR 标准 MemRef 描述符格式构造输入输出数据，封装数据指针、形状、步长等元数据。
 基于 MLIR `ExecutionEngine` + LLVM JIT 即时编译执行，将运行结果与 ONNX Runtime 官方基准结果做逐元素对比。
@@ -506,8 +545,8 @@ TAC方言 → Tensor/Linalg → MemRef → Affine循环 → SCF → CF控制流 
 
 
 
-## 5. IR优化
-### 5.1 矩阵乘法优化：矩阵转置
+## 5. <a name='Pass设计优化IR'></a>Pass设计优化IR
+### 5.1 <a name='矩阵转置'></a>矩阵转置
 解决的问题：内存访问不连续
 A[M,K] x B[K,N] = C[M,N]\
 tac的MatMulOp在降级到linalg.GenericOp的时候，对B进行转置操作B[K,N]->B_T[N,K]，来提升缓存命中率，并设置对应的仿射循环映射
@@ -539,7 +578,7 @@ SmallVector<utils::IteratorType>iterTypes = {
 };
 ```
 
-### 5.2 矩阵乘法优化：维度交换
+### 5.2 <a name='维度交换'></a>维度交换
 解决的问题：内存访问不连续
 A[M,K] x B[K,N] = C[M,N]，
 另一种提高缓存命中率的方法，循环[M,N,K]->[M,K,N]，将K维度的迭代循环放到中间，最内部循环维度为N，N维度在遍历的时候，M维度和K维度不变，即A和B都是行索引不变，列索引在变，在行优先存储的情况下缓存命中率更高
@@ -573,7 +612,7 @@ SmallVector<utils::IteratorType>iterTypes = {
 };
 ```
 
-### 5.3 矩阵分块
+### 5.3 <a name='矩阵分块'></a>矩阵分块
 大矩阵装不下缓存,利用了SCF的矩阵分块，TilingInterface接口的能力
 ```C++
 // lib/pass_tac/LinalgTiling.cpp
@@ -603,7 +642,7 @@ for(auto target:targets){
 ```
 
 
-### 5.4 性能测试对比
+### 5.4 <a name='测试及缓存分析'></a>测试及缓存分析
 使用Valgrind Cachegrind工具量化矩阵乘法不同优化方案的缓存效率，验证转置、分块等内存访问优化的实际效果\
 测试脚本中配置的缓存参数与当前测试机器的硬件参数对齐：
 | 缓存层级 | 参数配置 | 对应硬件规格 |
