@@ -238,39 +238,23 @@ struct MatMulOpLowering : OpConversionPattern<tac::MatMulOp>{
         Value matmul_results;
 
         if(useTransposeB){
-            // 定义转置后的形状和空张量运算符
-            SmallVector<int64_t> transpShape = {N,K};
-            auto transpInit = tensor::EmptyOp::create(
-                rewriter,
-                loc,
-                transpShape,
-                resultType.getElementType()
-            );
-            // 定义维度置换规则 B[K,N] -> B_T[N,K]
-            SmallVector<int64_t> perm = {1,0};
-            auto transposedB = linalg::TransposeOp::create(
-                rewriter,
-                loc,
-                rhs,
-                transpInit.getResult(),
-                perm
-            );
-            // 定义索引映射：A[M,K] * B_T[N,K] - C[M,N]
-            // Map 0 (A):       (m,n,k) -> (m,k)
-            // Map 1 (B_T):     (m,n,k) -> (n,k)
-            // Map 2 (C):       (m,n,k) -> (m,n)
+            // 定义索引映射：A[M,K] * B[K,N] -> C[M,N]
+            // Map 0 (A):       (m,k,n) -> (m,k)
+            // Map 1 (B):       (m,k,n) -> (k,n)
+            // Map 2 (C):       (m,k,n) -> (m,n)
             // 保证创建的仿射映射和当前 IR 图在同一个上下文中
             // results定义输出的每个索引，分别对应输入的哪个维度表达式
             auto mapA = AffineMap::get(3,0,
-                {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(2)},
+                {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(1)},
                 rewriter.getContext()
             );
+            // [K,N]
             auto mapB = AffineMap::get(3,0,
                 {rewriter.getAffineDimExpr(1),rewriter.getAffineDimExpr(2)},
                 rewriter.getContext()
             );
             auto mapC = AffineMap::get(3,0,
-                {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(1)},
+                {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(2)},
                 rewriter.getContext()
             );
             SmallVector<AffineMap> maps = {mapA, mapB, mapC};
@@ -279,11 +263,11 @@ struct MatMulOpLowering : OpConversionPattern<tac::MatMulOp>{
             // - `reduction`：规约维度，循环内有累加依赖，不能直接并行。`k` 是矩阵乘的乘加累加维度，因此标记为规约
             SmallVector<utils::IteratorType>iterTypes = {
                 utils::IteratorType::parallel,  // m
+                utils::IteratorType::reduction, // k 
                 utils::IteratorType::parallel,  // n 
-                utils::IteratorType::reduction  // k 
             };
 
-            SmallVector<Value> genericIputs = {lhs,transposedB.getResults()[0]};
+            SmallVector<Value> genericIputs = {lhs,rhs};
 
             auto genericOp = linalg::GenericOp::create(
                 rewriter,
