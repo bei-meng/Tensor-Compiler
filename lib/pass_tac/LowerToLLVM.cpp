@@ -74,7 +74,7 @@ struct LowerToLLVMPass:mlir::PassWrapper<LowerToLLVMPass,
 
         // MemRef --> LLVM
         populateFinalizeMemRefToLLVMConversionPatterns(typeConverter, patterns);
-
+        
         // CF --> LLVM
         cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
         

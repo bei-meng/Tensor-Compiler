@@ -36,6 +36,8 @@ add_mlir_library(MLIRTacTransforms
   MLIRFuncToLLVM
   # ControlFlow 方言定义
   MLIRControlFlowDialect
+
+  MLIRLinalgTransforms
 )
 
 target_include_directories(MLIRTacTransforms

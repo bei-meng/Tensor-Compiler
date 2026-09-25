@@ -1,5 +1,25 @@
 # Tensor-Compiler
-基于 MLIR 框架实现自定义**TAC 张量方言**（Tensor Accelerator Compiler），支持部分 ONNX 算子（Constant、Add、ReLU、MatMul），实现了从 ONNX 计算图经 MLIR 到 LLVM IR 的逐层降级流水线，并通过 JIT 编译执行。
+基于 MLIR 框架实现自定义**TAC 张量方言**（Tensor Accelerator Compiler），支持部分 ONNX 算子（Constant、Add、ReLU、MatMul），实现了从 ONNX 计算图->自定义TAC方言->MLIR标准方言->LLVM IR 的逐层降级流水线，并通过 JIT 编译执行。
+
+测试：矩阵乘法A[2048,2048] x B[2048,2048] = C[2048,2048]\
+优化策略：矩阵转置(B[K,N] -> B_T[N,K]) vs. 维度交换([M,N,K]->[M,K,N]) vs. 矩阵转置+循环分块 vs. 维度交换+循环分块\
+测试结果分析：用Valgrind Cachegrind工具量化分析缓存效率
+| 指标 | 无优化 | 转置 | 维度交换 | 转置+分块 | 维度交换+分块 |
+| --- | --- | --- | --- | --- | --- |
+| 运行时间(未开启valgrind) | 27.3s | 9.34s | 7.16s | 11.2s | 10.1s |
+| 执行指令数 | 69.17B | 69.21B | 69.18B | 70.27B | 70.42B |
+| L1指令缓存读缺失 | 2.58M | 2.92M | 2.63M | 2.57M | 3.38M |
+| L2指令缓存读缺失 | 0.19M | 0.20M | 0.20M | 0.19M | 0.21M |
+| 内存读总次数 | 17.32B | 17.33B | **25.91B** | 17.46B | **25.92B** | 
+| L1数据缓存读缺失 | 8.61B | 0.56B | 0.55B | 0.58B | 0.71B |
+| L2数据缓存读缺失 | 8.60B | 0.54B | 0.54B | **0.0135B** | **0.0093B** |
+| 内存数据写次数 | 8.65B | 8.65B | 8.65B | 8.65B | 8.65B |
+| L1数据缓存写缺失 | 1.21M | 1.50M | 1.22M | 1.48M | 1.29M |
+| L2数据缓存写缺失 | 0.89M | 1.15M | 0.89M | 1.15M | 0.89M |
+
+可以发现[维度交换]会导致内存读总次数增加，主要原因是MNK->MKN后, 每次计算C[M,N]位置都在变化，破坏了C[M,N]的寄存器复用，每次循环迭代都需要读C[M,N]，内存读次数增加2048^3\
+[维度交换]相比[转置]更快，因为多出来的读指令C[M,N]都是L1命中，延迟极低，最内层依赖链更短，指令级并行（ILP）翻倍，**迭代之间没有循环携带依赖**。CPU 可以同时发射多条乘加指令，利用多个浮点执行单元并行计算，浮点吞吐量显著提升。\
+比较反常的是[分块]降低了效率，可以发现虽然L2数据缓存读缺失次数减少10多倍，但是分块带来的「循环控制开销、内层向量化损失、地址计算开销」总和，超过了「内存延迟减少」带来的收益，所以整体时间反而上升。短循环破坏了编译器向量化，x86 内存延迟低，内存收益权重小
 
 ## 1.环境配置
 ### 1.1 MLIR库安装
@@ -419,8 +439,8 @@ func.setType(builder.getFunctionType(argTypes, returnTypes));
 | --- | --- | --- |
 | `tac.constant` | `arith.constant` | 常量算子直接映射到算术方言常量，保留张量数值与类型，作为计算图的叶子节点 |
 | `tac.add` | `linalg.add` | 逐元素加法映射到 Linalg 原生逐元素算子，由框架统一处理形状语义 |
-| `tac.relu` | `linalg.max` | ReLU 算子（`y = max(x, 0)`）有两种降级方案：1. 通用方案：通过 `linalg.generic` 自定义仿射索引映射与计算逻辑，灵活性强但需手动处理 AffineMap，实现成本更高2. 简洁方案：直接与零常量做逐元素取大，复用原生算子优化。|
-| `tac.matmul` | `linalg.matmul` | 矩阵乘算子直接映射到 Linalg 原生矩阵乘算子 |
+| `tac.relu` | `linalg.generic` | 通过 `linalg.generic` 自定义仿射索引映射与计算逻辑，需手动处理 AffineMap|
+| `tac.matmul` | `linalg.matmul/linalg.generic` | 矩阵乘算子直接映射到 Linalg 原生矩阵乘算子 或者进行转置和维度交换优化转换为linalg.generic|
 
 可以通过tac-opt工具观察转换结果
 ```bash
@@ -480,6 +500,144 @@ TAC方言 → Tensor/Linalg → MemRef → Affine循环 → SCF → CF控制流 
 1. JIT 执行正确性验证
 按照 MLIR 标准 MemRef 描述符格式构造输入输出数据，封装数据指针、形状、步长等元数据。
 基于 MLIR `ExecutionEngine` + LLVM JIT 即时编译执行，将运行结果与 ONNX Runtime 官方基准结果做逐元素对比。
+![alt text](imgs/ortresutVSjit.png)
 2. 性能与访存验证
 集成 Valgrind Cachegrind 工具，统计各级 CPU 缓存命中率、访存次数，量化验证矩阵分块、转置等优化带来的访存性能提升，输出计算耗时。
 
+
+
+## 5. IR优化
+### 5.1 矩阵乘法优化：矩阵转置
+解决的问题：内存访问不连续
+A[M,K] x B[K,N] = C[M,N]\
+tac的MatMulOp在降级到linalg.GenericOp的时候，对B进行转置操作B[K,N]->B_T[N,K]，来提升缓存命中率，并设置对应的仿射循环映射
+```C++
+// lib/pass_tac/LowerToTensor.cpp
+// 定义索引映射：A[M,K] * B_T[N,K] - C[M,N]
+// Map 0 (A):       (m,n,k) -> (m,k)
+// Map 1 (B_T):     (m,n,k) -> (n,k)
+// Map 2 (C):       (m,n,k) -> (m,n)
+
+auto mapA = AffineMap::get(3,0,
+    {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(2)},
+    rewriter.getContext()
+);
+auto mapB = AffineMap::get(3,0,
+    {rewriter.getAffineDimExpr(1),rewriter.getAffineDimExpr(2)},
+    rewriter.getContext()
+);
+auto mapC = AffineMap::get(3,0,
+    {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(1)},
+    rewriter.getContext()
+);
+SmallVector<AffineMap> maps = {mapA, mapB, mapC};
+
+SmallVector<utils::IteratorType>iterTypes = {
+    utils::IteratorType::parallel,  // m
+    utils::IteratorType::parallel,  // n 
+    utils::IteratorType::reduction  // k 是矩阵乘的乘加累加维度，因此标记为规约
+};
+```
+
+### 5.2 矩阵乘法优化：维度交换
+解决的问题：内存访问不连续
+A[M,K] x B[K,N] = C[M,N]，
+另一种提高缓存命中率的方法，循环[M,N,K]->[M,K,N]，将K维度的迭代循环放到中间，最内部循环维度为N，N维度在遍历的时候，M维度和K维度不变，即A和B都是行索引不变，列索引在变，在行优先存储的情况下缓存命中率更高
+```C++
+// lib/pass_tac/LowerToTensor.cpp
+// 定义索引映射：A[M,K] * B[K,N] -> C[M,N]
+// Map 0 (A):       (m,k,n) -> (m,k)
+// Map 1 (B):       (m,k,n) -> (k,n)
+// Map 2 (C):       (m,k,n) -> (m,n)
+// 保证创建的仿射映射和当前 IR 图在同一个上下文中
+// results定义输出的每个索引，分别对应输入的哪个维度表达式
+auto mapA = AffineMap::get(3,0,
+    {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(1)},
+    rewriter.getContext()
+);
+// [K,N]
+auto mapB = AffineMap::get(3,0,
+    {rewriter.getAffineDimExpr(1),rewriter.getAffineDimExpr(2)},
+    rewriter.getContext()
+);
+auto mapC = AffineMap::get(3,0,
+    {rewriter.getAffineDimExpr(0),rewriter.getAffineDimExpr(2)},
+    rewriter.getContext()
+);
+SmallVector<AffineMap> maps = {mapA, mapB, mapC};
+
+SmallVector<utils::IteratorType>iterTypes = {
+    utils::IteratorType::parallel,  // m
+    utils::IteratorType::reduction, // k 是矩阵乘的乘加累加维度，因此标记为规约
+    utils::IteratorType::parallel,  // n 
+};
+```
+
+### 5.3 矩阵分块
+大矩阵装不下缓存,利用了SCF的矩阵分块，TilingInterface接口的能力
+```C++
+// lib/pass_tac/LinalgTiling.cpp
+for(auto target:targets){
+    scf::SCFTilingOptions options;
+    options.setTileSizes({
+        rewriter.getIndexAttr(M),
+        rewriter.getIndexAttr(N),
+        rewriter.getIndexAttr(K)
+    });
+
+    rewriter.setInsertionPoint(target);
+
+    auto result = scf::tileUsingSCF(
+        rewriter,
+        target,
+        options
+    );
+
+    if(failed(result))continue;
+
+    rewriter.replaceOp(
+        target.getOperation(),
+        result->replacements
+    );
+}
+```
+
+
+### 5.4 性能测试对比
+使用Valgrind Cachegrind工具量化矩阵乘法不同优化方案的缓存效率，验证转置、分块等内存访问优化的实际效果\
+测试脚本中配置的缓存参数与当前测试机器的硬件参数对齐：
+| 缓存层级 | 参数配置 | 对应硬件规格 |
+| --- | --- | --- |
+| L1 指令缓存 | `--I1=32768,8,64` | 32KB，8 路组相联，64B 缓存行 |
+| L1 数据缓存 | `--D1=32768,8,64` | 32KB，8 路组相联，64B 缓存行 |
+| 二级缓存（L2） | `--LL=4194304,16,64` | 4MB，16 路组相联，64B 缓存行 |
+```python
+valgrind_prefix = [
+    "valgrind",
+    "--tool=cachegrind",
+    f"--cachegrind-out-file={cache_out_file}",
+    # --CacheLevel=notActualSize(actualsize),Associativity,LineSize
+    "--I1=32768,8,64",     # Instruction L1: 32KB, 8-way, 64B line
+    "--D1=32768,8,64",     # Data L1: 32KB, 8-way, 64B line
+    "--LL=4194304,16,64"   # Last Level (L2): 4MB, 16-way, 64B line
+]
+```
+测试：矩阵乘法A[2048,2048] x B[2048,2048] = C[2048,2048]\
+优化策略：矩阵转置(B[K,N] -> B_T[N,K]) vs. 维度交换([M,N,K]->[M,K,N]) vs. 矩阵转置+循环分块 vs. 维度交换+循环分块\
+测试结果分析
+| 指标 | 无优化 | 转置 | 维度交换 | 转置+分块 | 维度交换+分块 |
+| --- | --- | --- | --- | --- | --- |
+| 运行时间(未开启valgrind) | 27.3s | 9.34s | 7.16s | 11.2s | 10.1s |
+| 执行指令数 | 69.17B | 69.21B | 69.18B | 70.27B | 70.42B |
+| L1指令缓存读缺失 | 2.58M | 2.92M | 2.63M | 2.57M | 3.38M |
+| L2指令缓存读缺失 | 0.19M | 0.20M | 0.20M | 0.19M | 0.21M |
+| 内存读总次数 | 17.32B | 17.33B | **25.91B** | 17.46B | **25.92B** | 
+| L1数据缓存读缺失 | 8.61B | 0.56B | 0.55B | 0.58B | 0.71B |
+| L2数据缓存读缺失 | 8.60B | 0.54B | 0.54B | **0.0135B** | **0.0093B** |
+| 内存数据写次数 | 8.65B | 8.65B | 8.65B | 8.65B | 8.65B |
+| L1数据缓存写缺失 | 1.21M | 1.50M | 1.22M | 1.48M | 1.29M |
+| L2数据缓存写缺失 | 0.89M | 1.15M | 0.89M | 1.15M | 0.89M |
+
+可以发现[维度交换]会导致内存读总次数增加，主要原因是MNK->MKN后, 每次计算C[M,N]位置都在变化，破坏了C[M,N]的寄存器复用，每次循环迭代都需要读C[M,N]，内存读次数增加2048^3\
+[维度交换]相比[转置]更快，因为多出来的读指令C[M,N]都是L1命中，延迟极低，最内层依赖链更短，指令级并行（ILP）翻倍，**迭代之间没有循环携带依赖**。CPU 可以同时发射多条乘加指令，利用多个浮点执行单元并行计算，浮点吞吐量显著提升。\
+比较反常的是[分块]降低了效率，可以发现虽然L2数据缓存读缺失次数减少10多倍，但是分块带来的「循环控制开销、内层向量化损失、地址计算开销」总和，超过了「内存延迟减少」带来的收益，所以整体时间反而上升。短循环破坏了编译器向量化，x86 内存延迟低，内存收益权重小

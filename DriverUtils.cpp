@@ -28,9 +28,15 @@ cl::opt<std::string> inputFilename(
     cl::value_desc("filename")
 );
 
-cl::opt<std::string> runTiling(
+cl::opt<bool> runTiling(
     "tiling",
     cl::desc("Enable tiling optimization"),
+    cl::init(false)
+);
+
+cl::opt<std::string> tileSize(
+    "tilesize",
+    cl::desc("tilesize"),
     cl::init("64,64,64")
 );
 

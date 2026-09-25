@@ -75,73 +75,73 @@ struct AddOpLowering : OpConversionPattern<tac::AddOp>{
 //===----------------------------------------------------------------------===//
 // Pattern: tac.relu -> linalg.max
 //===----------------------------------------------------------------------===//
-struct ReluOpLowering : OpConversionPattern<tac::ReluOp>{
-    using OpConversionPattern<tac::ReluOp>::OpConversionPattern;
-    LogicalResult matchAndRewrite(tac::ReluOp op,OpAdaptor adaptor,
-            ConversionPatternRewriter &rewriter)const override{
-        auto loc = op.getLoc();
-        auto type = cast<RankedTensorType>(op.getType());
-        Value zero = arith::ConstantOp::create(
-            rewriter,
-            loc,
-            rewriter.getZeroAttr(type.getElementType())
-        );
-        
-        auto dest = tensor::EmptyOp::create(
-            rewriter,
-            loc,
-            type.getShape(),
-            type.getElementType()
-        );
-        
-        rewriter.replaceOpWithNewOp<linalg::MaxOp>(op,
-            op.getType(),                       // 输出类别
-            ValueRange{adaptor.getInput(),zero},     // ins
-            ValueRange{dest}                    // outs
-        );
-        return success();
-    }
-};
-
-//===----------------------------------------------------------------------===//
-// Pattern: tac.relu -> linalg.generic
-//===----------------------------------------------------------------------===//
-// struct ReluOpLowering : public OpConversionPattern<tac::ReluOp> {
+// struct ReluOpLowering : OpConversionPattern<tac::ReluOp>{
 //     using OpConversionPattern<tac::ReluOp>::OpConversionPattern;
 //     LogicalResult matchAndRewrite(tac::ReluOp op,OpAdaptor adaptor,
 //             ConversionPatternRewriter &rewriter)const override{
 //         auto loc = op.getLoc();
 //         auto type = cast<RankedTensorType>(op.getType());
-
-//         // 索引映射（Indexing Map），定义「循环迭代维度」和「张量维度」
-//         auto indexingMap = rewriter.getMultiDimIdentityMap(type.getRank());
-//         // 先所有输入的映射，再所有输出的映射，主元素一一对应
-//         llvm::SmallVector<AffineMap> maps(2,indexingMap);
-//         llvm::SmallVector<utils::IteratorType> iterators(
-//             type.getRank(),utils::IteratorType::parallel);
-
-//         auto dest = rewriter.create<tensor::EmptyOp>(loc,
-//             type.getShape(),type.getElementType());
-
-//         rewriter.replaceOpWithNewOp<linalg::GenericOp>(op,
-//             type,                   // 结果类型
-//             adaptor.getInput(),     // 输入，单输入直接用
-//             ValueRange{dest},       // 输出
-//             maps,
-//             iterators,
-//             [](OpBuilder &nestedBuilder,Location nestedLoc,ValueRange args){
-//                 Value input = args[0];
-//                 Value zero = nestedBuilder.create<arith::ConstantOp>(
-//                     nestedLoc,nestedBuilder.getFloatAttr(input.getType(),0.0));
-//                 Value max = nestedBuilder.create<arith::MaxNumFOp>(
-//                     nestedLoc,input,zero);
-//                 nestedBuilder.create<linalg::YieldOp>(nestedLoc,max);
-//             }
+//         Value zero = arith::ConstantOp::create(
+//             rewriter,
+//             loc,
+//             rewriter.getZeroAttr(type.getElementType())
 //         );
         
+//         auto dest = tensor::EmptyOp::create(
+//             rewriter,
+//             loc,
+//             type.getShape(),
+//             type.getElementType()
+//         );
+        
+//         rewriter.replaceOpWithNewOp<linalg::MaxOp>(op,
+//             op.getType(),                       // 输出类别
+//             ValueRange{adaptor.getInput(),zero},     // ins
+//             ValueRange{dest}                    // outs
+//         );
 //         return success();
 //     }
 // };
+
+//===----------------------------------------------------------------------===//
+// Pattern: tac.relu -> linalg.generic
+//===----------------------------------------------------------------------===//
+struct ReluOpLowering : public OpConversionPattern<tac::ReluOp> {
+    using OpConversionPattern<tac::ReluOp>::OpConversionPattern;
+    LogicalResult matchAndRewrite(tac::ReluOp op,OpAdaptor adaptor,
+            ConversionPatternRewriter &rewriter)const override{
+        auto loc = op.getLoc();
+        auto type = cast<RankedTensorType>(op.getType());
+
+        // 索引映射（Indexing Map），定义「循环迭代维度」和「张量维度」
+        auto indexingMap = rewriter.getMultiDimIdentityMap(type.getRank());
+        // 先所有输入的映射，再所有输出的映射，主元素一一对应
+        llvm::SmallVector<AffineMap> maps(2,indexingMap);
+        llvm::SmallVector<utils::IteratorType> iterators(
+            type.getRank(),utils::IteratorType::parallel);
+
+        auto dest = tensor::EmptyOp::create(rewriter,loc,
+            type.getShape(),type.getElementType());
+
+        rewriter.replaceOpWithNewOp<linalg::GenericOp>(op,
+            type,                   // 结果类型
+            adaptor.getInput(),     // 输入，单输入直接用
+            ValueRange{dest},       // 输出
+            maps,
+            iterators,
+            [](OpBuilder &nestedBuilder,Location nestedLoc,ValueRange args){
+                Value input = args[0];
+                Value zero = arith::ConstantOp::create(nestedBuilder,
+                    nestedLoc,nestedBuilder.getFloatAttr(input.getType(),0.0));
+                Value max = arith::MaxNumFOp::create(nestedBuilder,
+                    nestedLoc,input,zero);
+                linalg::YieldOp::create(nestedBuilder,nestedLoc,max);
+            }
+        );
+        
+        return success();
+    }
+};
 
 
 //===----------------------------------------------------------------------===//

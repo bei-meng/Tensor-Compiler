@@ -30,11 +30,11 @@ using namespace mlir;
 namespace {
 
 static std::tuple<int64_t, int64_t, int64_t> parseTileSize(const std::string &str) {
-    int m, k, n;
+    int m, n, k;
     // 解析失败直接用默认值
-    if (sscanf(str.data(), "%d,%d,%d", &m, &k, &n) != 3)
+    if (sscanf(str.data(), "%d,%d,%d", &m, &n, &k) != 3)
         return {64, 64, 64};
-    return {m, k, n};
+    return {m, n, k};
 }
 
 struct LinalgTilingPass: tac::impl::LinalgTilingBase<LinalgTilingPass> {

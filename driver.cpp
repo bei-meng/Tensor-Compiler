@@ -92,9 +92,9 @@ namespace{
             opt.useTranspose = runTranspose;  
             opt.useExchange = runExchange;
             pm.addPass(tac::createLowerToTensorPass(opt));
-            if (runTiling != "False") {
+            if (runTiling) {
                 tac::LinalgTilingOptions optSize;
-                optSize.tileSize = runTiling;
+                optSize.tileSize = tileSize;
                 pm.addPass(tac::createLinalgTilingPass(optSize));
             }
             
@@ -131,8 +131,8 @@ namespace{
         }
 
         if(emitAction >= DumpMLIRLLVM || emitAction == DumpLLVMIR){
-            // MemRef 元数据展开
-            pm.addPass(mlir::memref::createExpandReallocPass());
+            // MemRef 元数据展开 在LowerAffine之前加，把subview提前展开成地址计算
+            pm.addPass(mlir::memref::createExpandStridedMetadataPass());
             // Affine 循环降级
             pm.addPass(mlir::createLowerAffinePass());
             // LLVM 降级
