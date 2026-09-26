@@ -8,6 +8,15 @@ target_link_libraries(
     MLIRTacDialect
     MLIRTacTransforms
     # ===== 方言库 =====
+    MLIRFuncDialect
+    MLIRLinalgDialect
+    MLIRLLVMDialect
+    MLIRAffineDialect
+    MLIRSCFDialect
+    MLIRControlFlowDialect
+    MLIRMemRefDialect
+    MLIRArithDialect
+    # ===== 方言库 =====
     MLIROptLib              # 对应 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
     MLIRFuncDialect     # 对应 #include "mlir/Dialect/Func/IR/FuncOps.h"
     MLIRTransforms          # 对应 #include "mlir/Transforms/Passes.h"

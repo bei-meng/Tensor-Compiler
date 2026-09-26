@@ -1,5 +1,5 @@
 # Tensor-Compiler
-基于 MLIR 框架实现自定义**TAC 张量方言**（Tensor Accelerator Compiler），支持部分 ONNX 算子（Constant、Add、ReLU、MatMul），实现了从 ONNX 计算图->自定义TAC方言->MLIR标准方言->LLVM IR 的逐层降级流水线，并通过 JIT 编译执行。
+基于 MLIR 框架实现自定义**TAC 张量方言**（Tensor Accelerator Compiler），支持部分 ONNX 算子（Constant、Add、ReLU、MatMul），实现了从 ONNX 计算图->自定义TAC方言->MLIR标准方言->LLVM IR 的逐层降级流水线，并通过 JIT 编译执行进行测试和验证。实现了矩阵转置、矩阵乘法维度交换、矩阵分块PASS，以及DCE(死代码消除)和CSE(公共子表达式消除)等优化PASS。
 
 测试：矩阵乘法A[2048,2048] x B[2048,2048] = C[2048,2048]\
 优化策略：矩阵转置(B[K,N] -> B_T[N,K]) vs. 维度交换([M,N,K]->[M,K,N]) vs. 矩阵转置+循环分块 vs. 维度交换+循环分块\

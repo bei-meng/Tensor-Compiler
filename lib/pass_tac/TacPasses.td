@@ -23,3 +23,14 @@ def LinalgTiling : Pass<"LinalgTiling"> {
         Option<"tileSize", "tile-size", "std::string", "\"64,64,64\"", "tileSize">
     ];
 }
+
+
+def DCE : Pass<"tac-dce","mlir::func::FuncOp"> {
+    let summary = "DCE";
+    let constructor = "tac::createDCEPass()";
+}
+
+def CSE : Pass<"tac-cse">{
+    let summary = "CSE";
+    let constructor = "tac::createCSEPass()";
+}

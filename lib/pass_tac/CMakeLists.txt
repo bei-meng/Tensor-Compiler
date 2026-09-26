@@ -10,6 +10,8 @@ add_mlir_library(MLIRTacTransforms
   LowerToTensor.cpp
   LowerToLLVM.cpp
   LinalgTiling.cpp
+  CSE.cpp
+  DCE.cpp
 
   DEPENDS
   MLIRTacTransformsIncGen
